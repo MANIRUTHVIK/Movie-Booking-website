@@ -1,0 +1,111 @@
+
+
+.movie-card {
+  background-color: var(--background);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  transition: all var(--transition);
+  cursor: pointer;
+  animation: fadeIn 0.5s var(--transition) backwards;
+}
+
+.movie-card:hover {
+  transform: translateY(-8px) scale(1.02);
+  box-shadow: var(--shadow-xl);
+}
+
+.movie-card-content {
+  padding: var(--spacing-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing);
+}
+
+.movie-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+  line-height: 1.3;
+}
+
+.movie-description {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-height: 4.5rem;
+}
+
+.movie-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-sm);
+}
+
+.detail-badge {
+  padding: 0.35rem 0.875rem;
+  background-color: var(--surface-light);
+  border: 1px solid var(--surface-dark);
+  border-radius: var(--radius-full);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+
+.detail-badge:hover {
+  background-color: var(--surface);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.movie-card .btn-primary {
+  margin-top: var(--spacing);
+  width: 100%;
+}
+
+/* Stagger animation for multiple cards */
+.movie-card:nth-child(1) {
+  animation-delay: 0s;
+}
+.movie-card:nth-child(2) {
+  animation-delay: 0.1s;
+}
+.movie-card:nth-child(3) {
+  animation-delay: 0.15s;
+}
+.movie-card:nth-child(4) {
+  animation-delay: 0.2s;
+}
+.movie-card:nth-child(5) {
+  animation-delay: 0.25s;
+}
+.movie-card:nth-child(6) {
+  animation-delay: 0.3s;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .movie-card-content {
+    padding: var(--spacing-md);
+  }
+
+  .movie-title {
+    font-size: 1.25rem;
+  }
+
+  .movie-description {
+    font-size: 0.9rem;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    min-height: 3rem;
+  }
+}

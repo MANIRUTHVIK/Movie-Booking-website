@@ -1,8 +1,11 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const dotenv = require("dotenv");
+const cors = require("cors");
 const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
 const requestLogger = require("./middlewares/requestlogger");
+const errorHandler = require("./middlewares/globalerrorlog");
 const connectDB = require("./config/dbconnect");
 const User = require("./models/user");
 dotenv.config();
@@ -10,21 +13,24 @@ dotenv.config();
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: "Something went wrong!" });
-});
+
+// CORS configuration
+const corsOptions = {
+  origin: process.env.FRONTEND_URL || "http://localhost:5173",
+  credentials: true,
+  optionsSuccessStatus: 200,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+};
+
 app.use(express.json());
+app.use(cors(corsOptions));
 const PORT = process.env.PORT || 3000;
 const tokenVerificationLogger = require("./middlewares/tokenverficationlogger");
 const Movie = require("./models/movie");
 const Show = require("./models/Show");
 const Booking = require("./models/Booking");
-app.use(
-  cors({
-    origin: "*",
-  })
-);
+
 app.post("/auth/user/register", async (req, res) => {
   try {
     const { name, email, password, role = "user" } = req.body;
@@ -41,7 +47,17 @@ app.post("/auth/user/register", async (req, res) => {
       { userId: newUser._id, role: newUser.role },
       process.env.JWT_SECRET
     );
-    res.status(201).json({ message: "User registered successfully", token });
+    res.cookie("token", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    });
+    res.status(201).json({
+      message: "User registered successfully",
+      token,
+      role: newUser.role,
+    });
   } catch (error) {
     res.status(500).json({ error: "Internal server error" });
   }
@@ -56,6 +72,12 @@ app.post("/auth/user/login", async (req, res) => {
         { userId: user._id, role: user.role },
         process.env.JWT_SECRET
       );
+      // res.cookie("token", token, {
+      //   httpOnly: true,
+      //   secure: process.env.NODE_ENV === "production",
+      //   sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      //   maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      // });
       res
         .status(200)
         .json({ message: "Login successful", token, role: user.role });
@@ -296,62 +318,18 @@ app.delete("/shows/:id", tokenVerificationLogger, async (req, res) => {
 app.post("/bookings", tokenVerificationLogger, async (req, res) => {
   try {
     const decoded = jwt.verify(req.token, process.env.JWT_SECRET);
-    const {
-      show,
-      seats,
-      paymentMethod = "stripe",
-      cardDetails, // User-provided card details
-    } = req.body;
+    const { show, seats, paymentMethod = "stripe", paymentMethodId } = req.body;
 
     // Validate input
     if (!show || !seats || seats.length === 0) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Validate card details if payment method is stripe
-    if (paymentMethod === "stripe" && !cardDetails) {
+    // Validate payment method ID if payment method is stripe
+    if (paymentMethod === "stripe" && !paymentMethodId) {
       return res.status(400).json({
-        error: "Card details are required for payment",
-        required: {
-          cardNumber: "16-digit card number",
-          expMonth: "2-digit expiry month (e.g., 12)",
-          expYear: "4-digit expiry year (e.g., 2025)",
-          cvc: "3-digit security code",
-          holderName: "Cardholder name",
-        },
+        error: "Payment method ID is required for payment",
       });
-    }
-
-    // Validate card details format
-    if (cardDetails) {
-      const { cardNumber, expMonth, expYear, cvc, holderName } = cardDetails;
-
-      if (!cardNumber || !expMonth || !expYear || !cvc || !holderName) {
-        return res.status(400).json({
-          error: "Complete card details required",
-          missing: {
-            cardNumber: !cardNumber ? "required" : "provided",
-            expMonth: !expMonth ? "required" : "provided",
-            expYear: !expYear ? "required" : "provided",
-            cvc: !cvc ? "required" : "provided",
-            holderName: !holderName ? "required" : "provided",
-          },
-        });
-      }
-
-      // Basic validation
-      if (!/^\d{13,19}$/.test(cardNumber.replace(/\s/g, ""))) {
-        return res.status(400).json({ error: "Invalid card number format" });
-      }
-      if (!/^\d{1,2}$/.test(expMonth) || expMonth < 1 || expMonth > 12) {
-        return res.status(400).json({ error: "Invalid expiry month (1-12)" });
-      }
-      if (!/^\d{4}$/.test(expYear) || expYear < new Date().getFullYear()) {
-        return res.status(400).json({ error: "Invalid or expired year" });
-      }
-      if (!/^\d{3,4}$/.test(cvc)) {
-        return res.status(400).json({ error: "Invalid CVC (3-4 digits)" });
-      }
     }
 
     // Start a transaction for atomic booking
@@ -386,31 +364,22 @@ app.post("/bookings", tokenVerificationLogger, async (req, res) => {
 
       const totalAmount = showData.price * seats.length;
 
-      // Create and auto-confirm Stripe payment intent with user-provided card details
+      // Create and auto-confirm Stripe payment intent with payment method
       const paymentIntent = await stripe.paymentIntents.create({
         amount: Math.round(totalAmount * 100), // Stripe expects amount in cents
         currency: "usd",
+        payment_method: paymentMethodId, // Use the payment method ID from frontend
+        confirm: true,
+        automatic_payment_methods: {
+          enabled: true,
+          allow_redirects: "never",
+        },
         metadata: {
           userId: decoded.userId,
           showId: show,
           seats: seats.join(","),
           seatCount: seats.length,
         },
-        // Auto-confirm with user-provided card details
-        confirm: true,
-        payment_method_data: {
-          type: "card",
-          card: {
-            number: cardDetails.cardNumber.replace(/\s/g, ""), // Remove spaces
-            exp_month: parseInt(cardDetails.expMonth),
-            exp_year: parseInt(cardDetails.expYear),
-            cvc: cardDetails.cvc,
-          },
-          billing_details: {
-            name: cardDetails.holderName,
-          },
-        },
-        return_url: "http://localhost:3000", // Required for some payment methods
       });
 
       // Check if payment was successful
@@ -497,9 +466,17 @@ app.post("/bookings", tokenVerificationLogger, async (req, res) => {
 app.get("/bookings", tokenVerificationLogger, async (req, res) => {
   try {
     const decoded = jwt.verify(req.token, process.env.JWT_SECRET);
-    const bookings = await Booking.find({ user: decoded.userId }).populate({});
+    const bookings = await Booking.find({ user: decoded.userId })
+      .populate({
+        path: "show",
+        populate: {
+          path: "movie",
+        },
+      })
+      .sort({ createdAt: -1 });
     res.status(200).json({ message: "Booking list", bookings });
   } catch (error) {
+    console.error("Get bookings error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -507,7 +484,12 @@ app.get("/bookings/:id", tokenVerificationLogger, async (req, res) => {
   try {
     const decoded = jwt.verify(req.token, process.env.JWT_SECRET);
     const booking = await Booking.findById(req.params.id)
-      .populate("show")
+      .populate({
+        path: "show",
+        populate: {
+          path: "movie",
+        },
+      })
       .populate("user");
     if (!booking) {
       return res.status(404).json({ error: "Booking not found" });
@@ -520,6 +502,7 @@ app.get("/bookings/:id", tokenVerificationLogger, async (req, res) => {
     }
     res.status(200).json({ message: "Booking details", booking });
   } catch (error) {
+    console.error("Get booking by ID error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -532,11 +515,13 @@ app.get("/bookings/:movieId", tokenVerificationLogger, async (req, res) => {
       return res.status(403).json({ error: "Access denied" });
     }
     const bookings = await Booking.find()
-      .populate({})
       .populate("user")
       .populate({
         path: "show",
         match: { movie: movieId },
+        populate: {
+          path: "movie",
+        },
       });
     const filteredBookings = bookings.filter(
       (booking) => booking.show !== null
@@ -545,11 +530,13 @@ app.get("/bookings/:movieId", tokenVerificationLogger, async (req, res) => {
       .status(200)
       .json({ message: "Bookings for movie", bookings: filteredBookings });
   } catch (error) {
+    console.error("Get bookings by movie error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// connect to database and start server
+app.use(errorHandler);
+
 connectDB();
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);

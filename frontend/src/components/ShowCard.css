@@ -1,0 +1,142 @@
+.show-card {
+  background-color: var(--background);
+  border: 2px solid var(--surface-dark);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-lg);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--spacing-lg);
+  transition: all var(--transition);
+  animation: fadeIn 0.5s var(--transition) backwards;
+}
+
+.show-card:hover {
+  border-color: var(--primary);
+  box-shadow: var(--shadow-md);
+  transform: translateX(4px);
+}
+
+.show-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing);
+}
+
+.show-datetime {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  flex-wrap: wrap;
+}
+
+.show-date,
+.show-time {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.show-time {
+  color: var(--primary);
+}
+
+.show-details {
+  display: flex;
+  gap: var(--spacing);
+  flex-wrap: wrap;
+}
+
+.show-screen,
+.show-price {
+  padding: 0.4rem 1rem;
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  font-weight: 600;
+  transition: all var(--transition-fast);
+}
+
+.show-screen {
+  background-color: var(--surface-light);
+  color: var(--text-secondary);
+  border: 1px solid var(--surface-dark);
+}
+
+.show-price {
+  background-color: var(--primary);
+  color: var(--text-white);
+  box-shadow: var(--shadow-sm);
+}
+
+.show-seats {
+  margin-top: var(--spacing-sm);
+}
+
+.seats-available {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--success);
+  padding: 0.25rem 0.75rem;
+  background-color: rgba(34, 197, 94, 0.1);
+  border-radius: var(--radius);
+  display: inline-block;
+}
+
+.seats-available.sold-out {
+  color: var(--accent-red);
+  background-color: rgba(239, 68, 68, 0.1);
+}
+
+.show-card .btn-primary {
+  padding: 0.75rem 1.75rem;
+  white-space: nowrap;
+}
+
+.show-card .btn-primary:disabled {
+  background-color: var(--surface);
+  color: var(--text-light);
+}
+
+/* Stagger animation for multiple show cards */
+.show-card:nth-child(1) {
+  animation-delay: 0s;
+}
+.show-card:nth-child(2) {
+  animation-delay: 0.1s;
+}
+.show-card:nth-child(3) {
+  animation-delay: 0.15s;
+}
+.show-card:nth-child(4) {
+  animation-delay: 0.2s;
+}
+.show-card:nth-child(5) {
+  animation-delay: 0.25s;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .show-card {
+    flex-direction: column;
+    align-items: stretch;
+    padding: var(--spacing-md);
+  }
+
+  .show-info {
+    gap: var(--spacing-sm);
+  }
+
+  .show-datetime {
+    gap: var(--spacing);
+  }
+
+  .show-date,
+  .show-time {
+    font-size: 1rem;
+  }
+
+  .show-card .btn-primary {
+    width: 100%;
+  }
+}
