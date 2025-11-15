@@ -6,7 +6,18 @@ const bookingSchema = new mongoose.Schema(
     show: { type: mongoose.Schema.Types.ObjectId, ref: "Show" },
     seats: [String],
     totalAmount: Number,
-    status: { type: String, default: "confirmed" },
+    status: {
+      type: String,
+      default: "pending",
+      enum: ["pending", "confirmed", "failed", "cancelled"],
+    },
+    paymentIntentId: String, // Stripe payment intent ID
+    paymentStatus: {
+      type: String,
+      default: "pending",
+      enum: ["pending", "succeeded", "failed", "cancelled"],
+    },
+    paymentMethod: String, // e.g., "stripe"
   },
   { timestamps: true }
 );

@@ -6,6 +6,9 @@ const requestLogger = require("./middlewares/requestlogger");
 const connectDB = require("./config/dbconnect");
 const User = require("./models/user");
 dotenv.config();
+
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+
 const app = express();
 app.use((err, req, res, next) => {
   console.error(err.stack);
@@ -17,6 +20,11 @@ const tokenVerificationLogger = require("./middlewares/tokenverficationlogger");
 const Movie = require("./models/movie");
 const Show = require("./models/Show");
 const Booking = require("./models/Booking");
+app.use(
+  cors({
+    origin: "*",
+  })
+);
 app.post("/auth/user/register", async (req, res) => {
   try {
     const { name, email, password, role = "user" } = req.body;
@@ -288,57 +296,201 @@ app.delete("/shows/:id", tokenVerificationLogger, async (req, res) => {
 app.post("/bookings", tokenVerificationLogger, async (req, res) => {
   try {
     const decoded = jwt.verify(req.token, process.env.JWT_SECRET);
-    const { show, seats } = req.body;
+    const {
+      show,
+      seats,
+      paymentMethod = "stripe",
+      cardDetails, // User-provided card details
+    } = req.body;
+
+    // Validate input
     if (!show || !seats || seats.length === 0) {
       return res.status(400).json({ error: "Missing required fields" });
     }
-    const showData = await Show.findById(show);
-    if (!showData) {
-      return res.status(404).json({ error: "Show not found" });
-    }
-    if (
-      seats.some((s) => {
-        const seat = showData.seats.find((seat) => seat.number === String(s));
-        return !seat || seat.isBooked;
-      })
-    ) {
-      return res
-        .status(400)
-        .json({ error: "One or more seats are already booked" });
-    }
-    const totalAmount = showData.price * seats.length;
-    const newBooking = new Booking({
-      user: decoded.userId,
-      show,
-      seats,
-      totalAmount,
-      status: "confirmed",
-    });
-    await newBooking.save();
 
-    const seatNumbersToBook = seats.map((s) => String(s));
+    // Validate card details if payment method is stripe
+    if (paymentMethod === "stripe" && !cardDetails) {
+      return res.status(400).json({
+        error: "Card details are required for payment",
+        required: {
+          cardNumber: "16-digit card number",
+          expMonth: "2-digit expiry month (e.g., 12)",
+          expYear: "4-digit expiry year (e.g., 2025)",
+          cvc: "3-digit security code",
+          holderName: "Cardholder name",
+        },
+      });
+    }
 
-    const updatedShow = await Show.findByIdAndUpdate(
-      show,
-      { $set: { "seats.$[elem].isBooked": true } },
-      {
-        arrayFilters: [{ "elem.number": { $in: seatNumbersToBook } }],
-        new: true,
+    // Validate card details format
+    if (cardDetails) {
+      const { cardNumber, expMonth, expYear, cvc, holderName } = cardDetails;
+
+      if (!cardNumber || !expMonth || !expYear || !cvc || !holderName) {
+        return res.status(400).json({
+          error: "Complete card details required",
+          missing: {
+            cardNumber: !cardNumber ? "required" : "provided",
+            expMonth: !expMonth ? "required" : "provided",
+            expYear: !expYear ? "required" : "provided",
+            cvc: !cvc ? "required" : "provided",
+            holderName: !holderName ? "required" : "provided",
+          },
+        });
       }
-    );
-    if (!updatedShow) {
-      console.warn("Warning: show update returned null for id:", show);
-    } else {
+
+      // Basic validation
+      if (!/^\d{13,19}$/.test(cardNumber.replace(/\s/g, ""))) {
+        return res.status(400).json({ error: "Invalid card number format" });
+      }
+      if (!/^\d{1,2}$/.test(expMonth) || expMonth < 1 || expMonth > 12) {
+        return res.status(400).json({ error: "Invalid expiry month (1-12)" });
+      }
+      if (!/^\d{4}$/.test(expYear) || expYear < new Date().getFullYear()) {
+        return res.status(400).json({ error: "Invalid or expired year" });
+      }
+      if (!/^\d{3,4}$/.test(cvc)) {
+        return res.status(400).json({ error: "Invalid CVC (3-4 digits)" });
+      }
+    }
+
+    // Start a transaction for atomic booking
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      // Find and validate show
+      const showData = await Show.findById(show).session(session);
+      if (!showData) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(404).json({ error: "Show not found" });
+      }
+
+      // Check seat availability
+      const unavailableSeats = seats.filter((seatNumber) => {
+        const seat = showData.seats.find(
+          (s) => s.number === String(seatNumber)
+        );
+        return !seat || seat.isBooked;
+      });
+
+      if (unavailableSeats.length > 0) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          error: "One or more seats are already booked",
+          unavailableSeats,
+        });
+      }
+
+      const totalAmount = showData.price * seats.length;
+
+      // Create and auto-confirm Stripe payment intent with user-provided card details
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: Math.round(totalAmount * 100), // Stripe expects amount in cents
+        currency: "usd",
+        metadata: {
+          userId: decoded.userId,
+          showId: show,
+          seats: seats.join(","),
+          seatCount: seats.length,
+        },
+        // Auto-confirm with user-provided card details
+        confirm: true,
+        payment_method_data: {
+          type: "card",
+          card: {
+            number: cardDetails.cardNumber.replace(/\s/g, ""), // Remove spaces
+            exp_month: parseInt(cardDetails.expMonth),
+            exp_year: parseInt(cardDetails.expYear),
+            cvc: cardDetails.cvc,
+          },
+          billing_details: {
+            name: cardDetails.holderName,
+          },
+        },
+        return_url: "http://localhost:3000", // Required for some payment methods
+      });
+
+      // Check if payment was successful
+      if (paymentIntent.status !== "succeeded") {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({
+          error: "Payment failed",
+          status: paymentIntent.status,
+          message: "Please try again with a different payment method",
+        });
+      }
+
+      // Create confirmed booking
+      const newBooking = new Booking({
+        user: decoded.userId,
+        show,
+        seats,
+        totalAmount,
+        status: "confirmed",
+        paymentIntentId: paymentIntent.id,
+        paymentStatus: "succeeded",
+        paymentMethod: "stripe",
+      });
+
+      await newBooking.save({ session });
+
+      // Mark seats as booked
+      const seatNumbersToBook = seats.map((s) => String(s));
+      const updatedShow = await Show.findByIdAndUpdate(
+        show,
+        { $set: { "seats.$[elem].isBooked": true } },
+        {
+          arrayFilters: [{ "elem.number": { $in: seatNumbersToBook } }],
+          session,
+          new: true,
+        }
+      );
+
+      await session.commitTransaction();
+      session.endSession();
+
+      // Log success
       const bookedCount = updatedShow.seats.filter((s) => s.isBooked).length;
       console.log(
-        `Updated show ${show}: ${bookedCount} seats are currently booked`
+        ` Booking successful - Show ${show}: ${bookedCount} seats are currently booked`
       );
+      console.log(`Payment processed: ${paymentIntent.id}`);
+
+      res.status(201).json({
+        message: "Booking and payment successful",
+        booking: newBooking,
+        paymentIntent: {
+          id: paymentIntent.id,
+          status: paymentIntent.status,
+          amount: paymentIntent.amount / 100,
+          currency: paymentIntent.currency,
+        },
+      });
+    } catch (transactionError) {
+      await session.abortTransaction();
+      session.endSession();
+
+      // If it's a Stripe error, provide more specific feedback
+      if (transactionError.type === "StripeCardError") {
+        return res.status(400).json({
+          error: "Payment failed",
+          message: transactionError.message,
+          decline_code: transactionError.decline_code,
+        });
+      }
+
+      throw transactionError;
     }
-    res
-      .status(201)
-      .json({ message: "Booking successful", booking: newBooking });
   } catch (error) {
-    res.status(500).json({ error: "Internal server error" });
+    console.error("Booking error:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      message: "Unable to process booking and payment. Please try again.",
+    });
   }
 });
 
